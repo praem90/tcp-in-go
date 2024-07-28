@@ -116,7 +116,7 @@ func useClient(index int) {
         case cmd == "help":
             fmt.Println("Available commands: \n ls \n cd <dir> \n get <file>")
         case cmd == "ls":
-            (*client.Conn).Write([]byte("ls"))
+            (*client.Conn).Write([]byte("ls\n"))
 
             for {
                 txt, err := connReader.ReadString('\n')
@@ -126,7 +126,7 @@ func useClient(index int) {
                 }
                 // connScanner.Scan()
                 // txt := connScanner.Text()
-                if (txt == "" || txt == "EOF") {
+                if (txt == "" || txt == "EOF\n") {
                     fmt.Println("End of file list")
                     break
                 }
@@ -135,32 +135,50 @@ func useClient(index int) {
                 }
                 fmt.Println(txt)
             }
+            fmt.Println("End of ls")
         case regexp.MustCompile(`^get `).MatchString(cmd):
-            (*client.Conn).Write([]byte(cmd))
+            (*client.Conn).Write([]byte(fmt.Sprintf("%s\n", cmd)))
             connScanner.Scan()
             filename := connScanner.Text()
             fmt.Printf("received filename %s\n", filename)
-            (*client.Conn).Write([]byte("ACK"))
             connScanner.Scan()
             sizeBuf := connScanner.Text()
+            fmt.Printf("File size string %s", sizeBuf)
             if size, err := strconv.Atoi(sizeBuf); err == nil {
-                (*client.Conn).Write([]byte("ACK"))
-                fmt.Printf("Creating tmp file: %s \n", filepath.Join(dir, filename))
+                fmt.Printf("Creating tmp file: %s for the size %d\n", filepath.Join(dir, filename), size)
                 file, err := os.Create(filepath.Join(dir, filename))
                 if err != nil {
                     println(err.Error())
                     continue
                 }
                 buf := make([]byte, 1024)
-                chunk := size/1024
-                for i:=0; i<=chunk; i++ {
+                received := 0
+                i := 0
+                for {
+                    i++
                     if read, err := (*client.Conn).Read(buf); read > 0 && err == nil {
-                        fmt.Printf("Read chunk %d of %d", i, chunk)
-                        file.WriteAt(buf, int64(i * 1024))
+                        // fmt.Printf("Last 6 bytes %s", string(buf[read-6:read]))
+                        // if (string(buf[read-6:read]) == "EOFEOF") {
+                        //     fmt.Print("\nGot the EOFEOF\n")
+                        //     break
+                        // }
+
+                        received += read
+
+                        fmt.Printf("Read %d chunk %d, total size: %d\n", read, i, received)
+                        file.Write(buf[0:read])
+
+                        if received >= size {
+                            fmt.Println("Received all the data")
+                            (*client.Conn).Write([]byte("ACK\n"))
+                            break
+                        }
                     } else {
                         println("Could not read file buffer")
+                        break
                     }
                 }
+                fmt.Println("\nFile saved successfully")
                 file.Close()
             } else {
                 (*client.Conn).Write([]byte("ERR"))
@@ -170,7 +188,9 @@ func useClient(index int) {
         case regexp.MustCompile(`^dir `).MatchString(cmd):
             dir = strings.TrimLeft(cmd, "dir ")
         case regexp.MustCompile(`^cd `).MatchString(cmd):
-            (*client.Conn).Write([]byte(cmd))
+            msg := fmt.Sprintf("%s\n", cmd)
+            fmt.Println(msg)
+            (*client.Conn).Write([]byte(msg))
         case cmd == "exit" || cmd == "q":
             return
         default:
