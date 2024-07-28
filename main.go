@@ -20,7 +20,7 @@ var Clients []Client
 var scanner *bufio.Scanner
 
 func main() {
-    tcp, err := net.Listen("tcp", "127.0.0.1:8990")
+    tcp, err := net.Listen("tcp", ":8990")
 
     if err != nil {
         panic(err)
@@ -86,10 +86,10 @@ func onConnect(conn net.Conn) {
     }
 
     conn.Write([]byte("Hey, Who are you?\n"));
-    name := make([]byte, 100)
+    name := make([]byte, 200)
 
     if bytesReceived, err := conn.Read(name); err == nil && bytesReceived > 0 {
-        client.Name = string(name[:bytesReceived-2])
+        client.Name = string(name[:bytesReceived])
         fmt.Printf("%s has been joined\n", client.Name)
         conn.Write([]byte(fmt.Sprintf("Hi %s, Nice to meet you!!\n", client.Name)))
         Clients = append(Clients, client)
@@ -107,9 +107,9 @@ func useClient(index int) {
 
     dir := os.TempDir()
     connScanner := bufio.NewScanner(*client.Conn)
+    connReader := bufio.NewReader(*client.Conn)
 
     for scanner.Scan() {
-
         cmd := scanner.Text()
 
         switch {
@@ -119,10 +119,19 @@ func useClient(index int) {
             (*client.Conn).Write([]byte("ls"))
 
             for {
-                connScanner.Scan()
-                txt := connScanner.Text()
-                if (txt == "") {
+                txt, err := connReader.ReadString('\n')
+                if err != nil {
+                    println(err.Error())
                     break
+                }
+                // connScanner.Scan()
+                // txt := connScanner.Text()
+                if (txt == "" || txt == "EOF") {
+                    fmt.Println("End of file list")
+                    break
+                }
+                if (txt == "exit") {
+                    (*client.Conn).Close()
                 }
                 fmt.Println(txt)
             }
@@ -131,8 +140,11 @@ func useClient(index int) {
             connScanner.Scan()
             filename := connScanner.Text()
             fmt.Printf("received filename %s\n", filename)
+            (*client.Conn).Write([]byte("ACK"))
             connScanner.Scan()
-            if size, err := strconv.Atoi(connScanner.Text()); err == nil {
+            sizeBuf := connScanner.Text()
+            if size, err := strconv.Atoi(sizeBuf); err == nil {
+                (*client.Conn).Write([]byte("ACK"))
                 fmt.Printf("Creating tmp file: %s \n", filepath.Join(dir, filename))
                 file, err := os.Create(filepath.Join(dir, filename))
                 if err != nil {
@@ -150,15 +162,21 @@ func useClient(index int) {
                     }
                 }
                 file.Close()
+            } else {
+                (*client.Conn).Write([]byte("ERR"))
+                println(err.Error())
+                println(sizeBuf)
             }
         case regexp.MustCompile(`^dir `).MatchString(cmd):
             dir = strings.TrimLeft(cmd, "dir ")
         case regexp.MustCompile(`^cd `).MatchString(cmd):
             (*client.Conn).Write([]byte(cmd))
         case cmd == "exit" || cmd == "q":
-            break
+            return
         default:
             fmt.Println("Try help to know available options")
         }
+
+        fmt.Println("Waiting for input")
     }
 }
