@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -106,8 +108,7 @@ func useClient(index int) {
     fmt.Printf("Interactive with the client %s\n", client.Name)
 
     dir := os.TempDir()
-    connScanner := bufio.NewScanner(*client.Conn)
-    connReader := bufio.NewReader(*client.Conn)
+    // connScanner := bufio.NewScanner(*client.Conn)
 
     for scanner.Scan() {
         cmd := scanner.Text()
@@ -115,69 +116,51 @@ func useClient(index int) {
         switch {
         case cmd == "help":
             fmt.Println("Available commands: \n ls \n cd <dir> \n get <file>")
-        case cmd == "ls":
-            (*client.Conn).Write([]byte("ls\n"))
+        case regexp.MustCompile(`^ls `).MatchString(cmd):
+            (*client.Conn).Write([]byte(fmt.Sprintf("%s\n", cmd)))
 
             for {
-                txt, err := connReader.ReadString('\n')
+                txt := make([]byte, 1024)
+                n, err := (*client.Conn).Read(txt)
                 if err != nil {
                     println(err.Error())
                     break
                 }
-                // connScanner.Scan()
-                // txt := connScanner.Text()
-                if (txt == "" || txt == "EOF\n") {
+                fmt.Print(string(txt))
+                if n >= 4 && string(txt[n-4:n-1]) == "EOF" {
                     fmt.Println("End of file list")
                     break
                 }
-                if (txt == "exit") {
-                    (*client.Conn).Close()
-                }
-                fmt.Println(txt)
             }
             fmt.Println("End of ls")
         case regexp.MustCompile(`^get `).MatchString(cmd):
             (*client.Conn).Write([]byte(fmt.Sprintf("%s\n", cmd)))
-            connScanner.Scan()
-            filename := connScanner.Text()
+            filename := strings.TrimPrefix(cmd, "get ")
             fmt.Printf("received filename %s\n", filename)
-            connScanner.Scan()
-            sizeBuf := connScanner.Text()
-            fmt.Printf("File size string %s", sizeBuf)
-            if size, err := strconv.Atoi(sizeBuf); err == nil {
-                fmt.Printf("Creating tmp file: %s for the size %d\n", filepath.Join(dir, filename), size)
+
+            if len(strings.TrimSpace(filename)) == 0 {
+                fmt.Println("Invalid filename")
+                continue
+            }
+
+            sizeBuf := make([]byte, 8)
+
+            if _, err := io.ReadFull(*client.Conn, sizeBuf); err == nil {
+                fmt.Printf("File size string %d\n", sizeBuf)
+                size := binary.BigEndian.Uint16(sizeBuf)
+                if size <= 0 {
+                    println("Unable to read size")
+                    continue
+                }
+
+                fmt.Printf("Creating tmp file: %s for the size %d \n", filepath.Join(dir, filename), size)
+                fmt.Println(sizeBuf)
                 file, err := os.Create(filepath.Join(dir, filename))
                 if err != nil {
                     println(err.Error())
                     continue
                 }
-                buf := make([]byte, 1024)
-                received := 0
-                i := 0
-                for {
-                    i++
-                    if read, err := (*client.Conn).Read(buf); read > 0 && err == nil {
-                        // fmt.Printf("Last 6 bytes %s", string(buf[read-6:read]))
-                        // if (string(buf[read-6:read]) == "EOFEOF") {
-                        //     fmt.Print("\nGot the EOFEOF\n")
-                        //     break
-                        // }
-
-                        received += read
-
-                        fmt.Printf("Read %d chunk %d, total size: %d\n", read, i, received)
-                        file.Write(buf[0:read])
-
-                        if received >= size {
-                            fmt.Println("Received all the data")
-                            (*client.Conn).Write([]byte("ACK\n"))
-                            break
-                        }
-                    } else {
-                        println("Could not read file buffer")
-                        break
-                    }
-                }
+                io.CopyN(file, *client.Conn, int64(size))
                 fmt.Println("\nFile saved successfully")
                 file.Close()
             } else {
@@ -191,6 +174,21 @@ func useClient(index int) {
             msg := fmt.Sprintf("%s\n", cmd)
             fmt.Println(msg)
             (*client.Conn).Write([]byte(msg))
+        case cmd == "pwd":
+            msg := fmt.Sprintf("%s\n", cmd)
+            (*client.Conn).Write([]byte(msg))
+            txt := make([]byte, 2 * 1024)
+            n, err := (*client.Conn).Read(txt)
+            if err != nil {
+                println(err.Error())
+                break
+            }
+            fmt.Print(string(txt))
+            if n >= 4 && string(txt[n-4:n-1]) == "EOF" {
+                fmt.Println("End of file list")
+                break
+            }
+
         case cmd == "exit" || cmd == "q":
             return
         default:
